@@ -8,7 +8,7 @@ from base64 import b64encode,b64decode
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
-from sql_helper import SqlHelper
+from .sql_helper import SqlHelper
 
 def _encrypt_pwd(config):
     key = get_random_bytes(16)
