@@ -8,7 +8,7 @@ class SqlHelper():
     """操作mysql数据库，基本方法 
 
         """
-    def __init__(self, host="localhost", username="root", password="", port=3306, database=None):
+    def __init__(self, host="localhost", username="root", password="", port=3306, database=None, charset="utf8mb4"):
         self.host = host
         self.username = username
         self.password = password
@@ -18,7 +18,7 @@ class SqlHelper():
         self.cur = None
 
         try:
-            self.con = pymysql.connect(host=self.host, user=self.username, passwd=self.password, port=self.port, charset="utf8mb4")
+            self.con = pymysql.connect(host=self.host, user=self.username, passwd=self.password, port=self.port, charset=charset)
             # 所有的查询，都在连接 con 的一个模块 cursor 上面运行的
             self.cur = self.con.cursor()
             if database is not None:
