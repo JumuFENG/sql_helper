@@ -69,13 +69,12 @@ class SqlHelper():
         if self.is_exist_table(tablename):
             return
         sql = ''
-        sql_mid = '`id` bigint(11) NOT NULL AUTO_INCREMENT,'
+        sql_mid = ''
         for attr,value in attrdict.items():
-            sql_mid = sql_mid + '`'+attr + '`'+' '+ value+','
-        sql = sql + 'CREATE TABLE IF NOT EXISTS %s (' % tablename
-        sql = sql + sql_mid
-        sql = sql + constraint
-        sql = sql + ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+            sql_mid += '`'+attr + '`'+' '+ value+','
+        sql += 'CREATE TABLE IF NOT EXISTS %s (' % tablename
+        sql += sql_mid + constraint 
+        sql += ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
         #print('createTable:' + sql)
         self.execute_commit(sql)
 
@@ -152,7 +151,7 @@ class SqlHelper():
             print("error:", error)
             return error
 
-    def insert(self, tablename, params):
+    def insert(self, tablename, params, **kwargs):
         """插入数据库
 
             args：
@@ -160,18 +159,28 @@ class SqlHelper():
                 key        ：属性键
                 value      ：属性值
         """
-        key = []
-        value = []
-        for tmpkey, tmpvalue in params.items():
-            key.append(tmpkey)
-            if isinstance(tmpvalue, str):
-                value.append("\'" + tmpvalue + "\'")
+        if params is not None:
+            if not isinstance(params, (dict, list, tuple)) or len(params) == 0:
+                e = SQLValueError('expression insert', 'invalid values')
+                raise e
+
+            attrs_sql = ''
+            if isinstance(params, dict):
+                columns = [k.strip('\'"') for k in params.keys()]
+                attrs_sql = f"({','.join(columns)})"
+                values = [v.decode('utf8') if isinstance(v, bytes) else v for v in params.values()]
             else:
-                value.append(tmpvalue)
-        attrs_sql = '('+','.join(key)+')'
-        values_sql = ' values('+','.join(value)+')'
-        sql = 'insert into %s'%tablename
-        sql = sql + attrs_sql + values_sql
+                values = [v.decode('utf8') if isinstance(v, bytes) else v for v in params]
+            values_sql = f' values {tuple(values)}'
+            kwargs = None
+        
+        if kwargs is not None:
+            columns = [k.strip('\'"') for k in kwargs.keys()]
+            attrs_sql = f"({','.join(columns)})"
+            values = [v.decode('utf8') if isinstance(v, bytes) else v for v in kwargs.values()]
+            values_sql = f'{tuple(values)}'
+
+        sql = 'insert into %s %s %s' % (tablename, attrs_sql, values_sql)
         #print('_insert:'+sql)
         self.execute_commit(sql)
 
