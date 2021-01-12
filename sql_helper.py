@@ -3,6 +3,7 @@
 
 import pymysql
 import os
+import csv
 
 class SqlHelper():
     """操作mysql数据库，基本方法 
@@ -77,6 +78,16 @@ class SqlHelper():
         sql += ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
         #print('createTable:' + sql)
         self.execute_commit(sql)
+
+    def recreate_table(self, tablename, attrdict, constraint):
+        if not self.is_exist_table(tablename):
+            return self.create_table(tablename, attrdict, constraint)
+
+        self.backup_table(tablename, tablename + '.csv')
+        self.delete_table(tablename)
+        self.create_table(tablename, attrdict, constraint)
+        self.restore_table(tablename, tablename + '.csv')
+        os.remove(tablename + '.csv')
 
     def execute_sql(self, sql=''):
         """执行sql语句，针对读操作返回结果集
@@ -213,7 +224,7 @@ class SqlHelper():
         sql += consql + order
         #print('select:' + sql)
         records = self.execute_sql(sql)
-        if records is None:
+        if records is None or len(records) == 0:
             return None
         if len(records[0]) == 1:
             return tuple([r for r, in records])
@@ -336,13 +347,14 @@ class SqlHelper():
         #print(sql)
         return self.execute_commit(sql)
 
-    def update_many(self, table, attrs, conkeys, values):
+    def update_many(self, table, conkeys, attrs = None, values = None, datalist = None):
         """更新多条数据, 有重复则
             args：
-                tablename  ：表名字
-                attrs      ：属性键
-                conkeys      : 条件属性键
-                values     ：所有属性值
+                tablename  : 表名字
+                attrs      : 属性键
+                conkeys    : 条件属性键
+                values     : 所有属性值
+                datalist   : dict list of data
 
             example：
                 table='test_mysqldb'
@@ -351,42 +363,63 @@ class SqlHelper():
                 values = [["liuqiao", "25", 101], ["liuqiao1", "26", 102], ["liuqiao2", "27", 103], ["liuqiao3", "28", 104]]
                 mydb.update_many(table, conkeys, keys, values)
         """
-        attrs_list = [a + '=(%s)' for a in attrs]
-        attrs_sql = ','.join(attrs_list)
-        cond_list = [c + '=(%s)' for c in conkeys]
-        cond_sql = ' and '.join(cond_list)
-        sql = "UPDATE %s SET %s where %s" % (table, attrs_sql, cond_sql)
-        #print(sql)
-        try:
-            for i in range(0,len(values),20000):
-                self.cur.executemany(sql, values[i:i+20000])
-                self.con.commit()
-        except pymysql.Error as e:
-            self.con.rollback()
-            error = 'insert_update_many executemany failed! ERROR (%s): %s' %(e.args[0],e.args[1])
-            print(error)
 
-    def insert_update_many(self, table, attrs, conkeys, values):
-        """插入多条数据, 有重复则更新
-        """
-        values_new = []
-        values_exist = []
-        for v in values:
-            cond_list = []
-            for i in range(0, len(conkeys)):
-                cond_list.append('%s = \'%s\'' % (conkeys[i], str(v[len(attrs) + i])))
-            cond_sql = ' or '.join(cond_list)
-            selectrows = self.select(table, conkeys, conds = cond_sql)
-            if selectrows is None or len(selectrows) == 0:
-                values_new.append(v)
-            else:
-                values_exist.append(v)
+        if datalist is not None:
+            if not isinstance(datalist, (list, tuple)):
+                print('update_many Error: datalist only accept list or tuple, but get ', type(datalist))
+                return
 
-        if len(values_new) > 0:
-            self.insert_many(table, attrs + conkeys, values_new)
+            if len(datalist) == 1:
+                attrs_dict = {k: v for k, v in datalist[0].items() if k not in conkeys and v is not None}
+                cond_dict = {k: v for k, v in datalist[0].items() if k in conkeys and v is not None}
+                self.update(table, attrs_dict, cond_dict)
+                return
 
-        if len(values_exist) > 0:
-            self.update_many(table, attrs, conkeys, values_exist)
+            keys = datalist[0].keys()
+            re_data = []
+            cand_data = []
+            for d in datalist:
+                if not len(d.keys()) == len(keys):
+                    re_data.append(d)
+                    continue
+                keys_same = True
+                for k in keys:
+                    if not k in d.keys():
+                        re_data.append(d)
+                        keys_same = False
+                        continue
+                if keys_same:
+                    cand_data.append(d)
+
+            cand_list = []
+            attr_keys = [k for k in keys if k not in conkeys]
+            for d in cand_data:
+                d_list = []
+                for k in attr_keys:
+                    d_list.append(d[k])
+                for k in conkeys:
+                    d_list.append(d[k])
+                cand_list.append(d_list)
+
+            self.update_many(table, conkeys = conkeys, attrs = attr_keys, values = cand_list)
+
+            if len(re_data):
+                self.update_many(table, conkeys = conkeys, datalist = re_data)
+
+        if attrs is not None and values is not None:
+            attrs_list = [a + '=(%s)' for a in attrs]
+            attrs_sql = ','.join(attrs_list)
+            cond_list = [c + '=(%s)' for c in conkeys]
+            cond_sql = ' and '.join(cond_list)
+            sql = "UPDATE %s SET %s where %s" % (table, attrs_sql, cond_sql)
+            try:
+                for i in range(0,len(values),20000):
+                    self.cur.executemany(sql, values[i:i+20000])
+                    self.con.commit()
+            except pymysql.Error as e:
+                self.con.rollback()
+                error = 'update_many executemany failed! ERROR (%s): %s' %(e.args[0],e.args[1])
+                print(error)
 
     def drop_table(self, tablename):
         """删除数据库表
@@ -426,8 +459,15 @@ class SqlHelper():
         result, = self.select("information_schema.columns","count(*)",["table_name = '%s'" % tablename, "column_name = '%s'" % column_name, "table_schema = '%s'" % self.database])
         return result > 0
 
+    def is_exist_table_rows(self, tablename, clauses):
+        result = self.select(tablename, '*', conds = clauses)
+        return False if result is None or len(result) == 0 else len(result[0]) > 0
+
     def get_table_columns(self, tablename):
         return self.select("information_schema.columns", "column_name", ["table_schema = '%s'" % self.database, "table_name = '%s'" % tablename])
+
+    def get_table_columns_prim(self, tablename):
+        return self.select("information_schema.columns", "column_name", ["table_schema = '%s'" % self.database, "table_name = '%s'" % tablename, "column_key = 'PRI'"])
 
     def add_column(self, tablename, col, tp):
         sql = "alter table %s add %s %s" % (tablename, col, tp)
@@ -436,3 +476,60 @@ class SqlHelper():
     def delete_column(self, tablename, col):
         sql = "alter table %s drop column %s" % (tablename, col)
         self.execute_commit(sql)
+
+    def backup_table(self, tablename, file):
+        columns = self.get_table_columns(tablename)
+        expdata = tuple([tuple([x for x in columns])])
+        data = self.select(tablename, '*')
+        expdata += tuple([tuple(d.values()) for d in data])
+        with open(file, 'wt', encoding='utf-8') as bkf:
+           csv_out = csv.writer(bkf)
+           csv_out.writerows(expdata)
+
+    def restore_table(self, tablename, file, existing_rows='update'):
+        if not self.is_exist_table(tablename):
+            print('table: %s not exists, by pass %s' % (tablename, file))
+            return
+        if not os.path.isfile(file):
+            print('file: %s not exists, can not import to table %s' % (file, tbl))
+            return
+        
+        pri_keys = self.get_table_columns_prim(tablename)
+        pri_keys = [k for k in pri_keys]
+        col_names = []
+        data_insert = []
+        data_update = []
+        with open(file, 'rt', encoding='utf-8') as bkf:
+            csv_reader = csv.reader(bkf)
+            pri_idx = []
+            line_count = 0
+            for row in csv_reader:
+                if len(row) == 0:
+                    continue
+                if line_count == 0:
+                    col_names = row
+                    pri_idx = [ [k, col_names.index(k)] for k in pri_keys]
+                    line_count += 1
+                else:
+                    clause = ''
+                    pri_vals = []
+                    for [k, i] in pri_idx:
+                        clause += str(k) + '= \'' + str(row[i]) + '\' and '
+                        pri_vals.append(row[i])
+                    clause += ' 1=1 '
+                    if self.is_exist_table_rows(tablename, clauses = clause):
+                        if existing_rows == 'update':
+                            data_update.append(row)
+                    else:
+                        data_insert.append(row)
+        
+        self.execute_commit('SET FOREIGN_KEY_CHECKS=0')
+        if len(data_insert) > 0:
+            datalist = [{c:v for c,v in zip(col_names, row)} for row in data_insert]
+            self.insert_many(tablename, datalist=datalist)
+
+        if len(data_update) > 0:
+            datalist = [{c:v for c,v in zip(col_names, row)} for row in data_update]
+            self.update_many(tablename, conkeys = pri_keys, datalist = datalist)
+
+        self.execute_commit('SET FOREIGN_KEY_CHECKS=1')
