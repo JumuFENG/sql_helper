@@ -14,11 +14,12 @@ def _encrypt_pwd(config):
     key = get_random_bytes(16)
     cipher = AES.new(key, AES.MODE_CFB)
     ct_bytes = cipher.encrypt(config['Password'].encode('utf-8'))
-    config['iv'] = b64encode(cipher.iv).decode('utf-8')
-    config['Password'] = b64encode(ct_bytes).decode('utf-8')
-    config['key'] = b64encode(key).decode('utf-8')
-    config['encrypted'] = True
-    return config
+    config_en = {k:v for k,v in config.items()}
+    config_en['iv'] = b64encode(cipher.iv).decode('utf-8')
+    config_en['Password'] = b64encode(ct_bytes).decode('utf-8')
+    config_en['key'] = b64encode(key).decode('utf-8')
+    config_en['encrypted'] = True
+    return config_en
 
 def _decrypt_pwd(config):
     cipher = AES.new(b64decode(config['key']), AES.MODE_CFB, iv=b64decode(config['iv']))
@@ -39,10 +40,9 @@ def _load_db_config(conf_file):
 
 def _save_db_config(conf_file, config):
     if not config['encrypted']:
-        config = _encrypt_pwd(config)
-    print(config)
+        config_en = _encrypt_pwd(config)
     with open(conf_file, "w") as fp:
-        json.dump(obj=config, fp=fp, ensure_ascii=False, indent=4)
+        json.dump(obj=config_en, fp=fp, ensure_ascii=False, indent=4)
 
 def _gather_db_config(conf_file):
     db_config_items = ['Host', 'Port', 'Schema', 'Charset', 'User']
